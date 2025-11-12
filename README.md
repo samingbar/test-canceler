@@ -29,6 +29,11 @@ Use this project to experiment with high‑volume workflow creation and mass can
   - Task queue `batch-queue`.
   - Activity `batch_cancel_workflows` issues a service batch termination with a visibility query.
 
+Namespace topology:
+- "Main" namespace hosts the high‑volume workflows (work service).
+- "Canceler" namespace hosts the canceler workflow and the Java activity worker that polls `batch-queue`.
+- The Java activity implementation connects to the main namespace when issuing StartBatchOperation so it can target the spawned workflows. Ensure both namespaces are correctly set in `.env` and in the Java worker if you change defaults.
+
 ---
 
 ## Repository Layout
@@ -41,6 +46,7 @@ src/
     worker.py             # Work service worker (task queue: work-task-queue)
     run.py                # Starts a CancelableWorkflow instance
     cancel.py             # Sends cancel signal to the parent workflow (optional)
+    config.py             # Work service config (reads from .env)
 
   canceler/
     activity.py           # query, bulk terminate, confirm
@@ -48,6 +54,7 @@ src/
     worker.py             # Canceler worker (task queue: canceler-task-queue)
     run.py                # Starts BulkCancelWorkflow
     payload_manager.py    # Simple oversize payload codec (/tmp/payloads)
+    config.py             # Canceler service config (reads from .env)
 
 main Java sources (batch worker)
   src/main/java/com/testcanceler/
@@ -100,27 +107,32 @@ pip install -e .
 
 ## Configuration
 
-Define these in `.env` at repo root:
+This repo centralizes most settings in Python via `src/work/config.py` and `src/canceler/config.py`, which read from `.env`.
 
-- `TEMPORAL_ADDRESS` – e.g., `us-east-1.aws.api.temporal.io:7233`
-- `TEMPORAL_NAMESPACE` – your Temporal Cloud namespace
-- `TEMPORAL_API_KEY_MAIN` – API key for the work service
-- `TEMPORAL_API_KEY_CANCELER` – API key for the canceler/batch services
+Set these variables in `.env` at the repo root:
+
+- Work service (Python):
+  - `TEMPORAL_MAIN_ADDRESS` – e.g., `us-east-1.aws.api.temporal.io:7233`
+  - `TEMPORAL_MAIN_NAMESPACE` – your namespace for spawning workflows
+  - `TEMPORAL_MAIN_TASK_QUEUE` – e.g., `work-task-queue`
+  - `TEMPORAL_API_KEY_MAIN` – API key with access to the above namespace
+
+- Canceler service (Python):
+  - `TEMPORAL_CANCELER_ADDRESS` – usually same as main address
+  - `TEMPORAL_CANCELER_NAMESPACE` – namespace where canceler workflow runs (often same as main)
+  - `TEMPORAL_CANCELER_TASK_QUEUE` – e.g., `canceler-task-queue`
+  - `TEMPORAL_API_KEY_CANCELER` – API key for the canceler
+
 - Optional tuning:
-  - `CANCEL_CONCURRENCY` – max parallel cancels (default 750)
+  - `CANCEL_CONCURRENCY` – max parallel terminates (default 750)
   - `CONFIRM_TIMEOUT_SECONDS` – confirm loop timeout (default 240)
   - `CONFIRM_POLL_SECONDS` – confirm loop poll interval (default 5)
 
-Important consistency notes:
+Notes:
 
-- Several files currently hard‑code `address`/`namespace`. Ensure they match your `.env` values or update them:
-  - Python workers/clients: `src/work/worker.py`, `src/work/run.py`, `src/work/cancel.py`, `src/canceler/worker.py`, `src/canceler/run.py`
-  - Java worker/activity: `src/main/java/com/testcanceler/worker/WorkerStarter.java`, `src/main/java/com/testcanceler/activity/WorkflowBatchActivitiesImpl.java`
-- The `.env` included here has example keys. Replace with your own secrets and avoid committing them.
-
-Search attribute:
-
-- Uses keyword attribute `WorkloadId` (default value "1"). Adjust in `src/work/workflow.py` and in canceler queries in `src/canceler/activity.py`.
+- The Java activity and Python canceler must target the same Temporal namespace as the spawned workloads (typically the "main" namespace) for visibility queries and terminations to succeed.
+- Search attribute used is a keyword `WorkloadId` with default value "1"; adjust in `src/work/config.py` (`WORKLOAD_ID_VALUE`) and ensure Java/Python queries match.
+- The `.env` committed here contains example keys; replace with your own and avoid committing secrets.
 
 Payload codec:
 
@@ -184,9 +196,9 @@ python src/work/cancel.py
   - Each child upserts `WorkloadId` to enable query‑based targeting.
 
 - Canceler service
-  - Kicks off `batch_cancel_workflows` (Java activity on `batch-queue`) using a visibility query like `WorkloadId = "1" AND ExecutionStatus = "Running"`.
-  - Lists any new workflows started after the batch request time and terminates them in parallel.
-  - Polls until no running workflows remain for the `WorkloadId`.
+  - Kicks off `batch_cancel_workflows` (Java activity on `batch-queue`) which issues a StartBatchOperation with a visibility query (by default `WorkloadId = "1" AND ExecutionStatus = "Running"`).
+  - Tracks the batch start time and repeatedly executes `query_new_wf_executions` to find workflows with `StartTime >= batchStartTime` and the same `WorkloadId`, then calls `bulk_cancel_workflows` to terminate them in parallel.
+  - Calls `confirm_all_canceled` to poll until no running workflows remain for the `WorkloadId`.
 
 ---
 
@@ -202,6 +214,7 @@ python src/work/cancel.py
 ## Notes and TODOs
 
 - Namespaces are hard‑coded in several files; unify them or switch to reading from `.env` for all clients/workers.
+- Java `WorkerStarter` currently hard‑codes the canceler namespace; consider reading it from `.env` like the activity implementation does for the main namespace.
 - Some concurrency settings in Python workers are set very high for laptop demos; tune down for real environments.
 - `track_batch` in `src/canceler/activity.py` is a WIP and not wired.
 - Consider adding `.env` to `.gitignore` and rotating any committed secrets.
@@ -211,4 +224,3 @@ python src/work/cancel.py
 ## License
 
 No license specified.
-

@@ -15,5 +15,9 @@ wheels/
 # Ignore Gradle build output directory
 build
 
+# Ignore compiled Java class output directories
+/bin/
+app/bin/
+
 #Ignore sensitive files
 ignore
