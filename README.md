@@ -127,6 +127,7 @@ Set these variables in `.env` at the repo root:
   - `CANCEL_CONCURRENCY` – max parallel terminates (default 750)
   - `CONFIRM_TIMEOUT_SECONDS` – confirm loop timeout (default 240)
   - `CONFIRM_POLL_SECONDS` – confirm loop poll interval (default 5)
+  These are set in the config files located inside the work and canceler packages. 
 
 Notes:
 
@@ -154,24 +155,26 @@ source .venv/bin/activate
 ```
 python src/work/worker.py
 ```
-
-3) Start the Java batch worker (terminal B)
-
-```
-./gradlew run
-```
-
-4) Start the Python canceler worker (terminal C)
-
-```
-python src/canceler/worker.py
-```
-
-5) Launch the spawning workflow (terminal D)
+3) Start the workflow snowball. This can grow as large as 2M+ workflows. (terminal B)
 
 ```
 python src/work/run.py
 # Starts parent CancelableWorkflow with many children/grandchildren on work-task-queue
+```
+
+4) Start the Java batch worker (terminal C)
+
+```
+./gradlew build
+./gradlew run
+```
+
+After this step, wait for the workflow execution snowball to grow as large as you'd like. 
+
+5) Start the Python canceler worker (terminal D)
+
+```
+python src/canceler/worker.py
 ```
 
 6) Start the cancellation orchestration (terminal E)
@@ -179,12 +182,6 @@ python src/work/run.py
 ```
 python src/canceler/run.py
 # Triggers Java batch cancel, cleans up new workflows, confirms all canceled
-```
-
-Optional: send a direct cancel signal to the parent
-
-```
-python src/work/cancel.py
 ```
 
 ---
